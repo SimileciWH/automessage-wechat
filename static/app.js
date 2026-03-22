@@ -271,9 +271,23 @@ btnSave.addEventListener('click', async () => {
 });
 
 // ── 执行发送 ──────────────────────────────────────────────────────────────────
-btnExecute.addEventListener('click', () => {
+btnExecute.addEventListener('click', async () => {
   if (state.executing) return;
   saveOpenEditors();
+
+  // 执行前自动保存 CSV，确保消息已落盘
+  try {
+    const res = await fetch('/api/save-csv', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filepath: state.filepath, crew: state.crew }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error);
+    log('💾 已自动保存 CSV', 'muted');
+  } catch (e) {
+    log(`❌ 自动保存失败，执行中止: ${e.message}`, 'error');
+    return;
+  }
 
   const mode = document.querySelector('input[name="mode"]:checked').value;
   const skipNames = state.crew.filter(r => r.skip).map(r => r.name).join(',');
