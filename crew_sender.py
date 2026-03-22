@@ -307,6 +307,10 @@ def _try_locate(asset: str, screenshot, confidence: float = LOCATE_CONFIDENCE) -
         return None
 
 
+# 记录上一次 detect_contact_in_results 的诊断信息，供错误消息使用
+_detect_diag: str = ""
+
+
 def _save_debug_screenshot(screenshot, tag: str) -> None:
     """保存调试截图到 logs/ 目录，文件名含时间戳和标签。"""
     from datetime import datetime
@@ -346,17 +350,20 @@ def detect_contact_in_results() -> Literal["ok", "not_found", "multiple"]:
     截一次全屏，定位联系人区域，数 ⓘ 按钮数量。
     复用同一张截图避免时序差异。
     返回 "ok" / "not_found" / "multiple"。
+    失败时将诊断信息写入模块变量 _detect_diag。
 
     策略一（模板匹配）：用 contacts_label / recently_used_label 定位区域边界。
     策略二（兜底）：模板匹配失败时，用 get_wechat_window() 坐标直接定位
       微信左侧面板搜索下拉区域，避免因 DPI 缩放导致模板匹配失败。
     """
+    global _detect_diag
     screenshot = pyautogui.screenshot()
 
     # 策略一：模板匹配定位上边界
     contacts_pos = _try_locate("assets/contacts_label.png", screenshot)
     recently_pos = _try_locate("assets/recently_used_label.png", screenshot, confidence=0.55)
     ref_pos = contacts_pos or recently_pos
+    strategy = "contacts_label" if contacts_pos else ("recently_used_label" if recently_pos else None)
 
     if ref_pos is not None:
         # 找下边界
@@ -369,21 +376,30 @@ def detect_contact_in_results() -> Literal["ok", "not_found", "multiple"]:
         region_bottom = min(lower_bounds) if lower_bounds else ref_pos.top + 200
         region = (ref_pos.left, ref_pos.top, 500, region_bottom - ref_pos.top)
         count = _count_info_buttons(screenshot, region)
+        _detect_diag = (
+            f"策略一({strategy})：区域 {region}，ⓘ 按钮数={count}"
+        )
     else:
         # 策略二：模板匹配失败，用微信窗口坐标兜底
-        # ⓘ 按钮只出现在联系人行（群聊无此按钮），全左侧面板扫描安全
         _save_debug_screenshot(screenshot, "detect_fallback")
         try:
             wx_x, wx_y, wx_w, wx_h = get_wechat_window()
         except Exception:
+            _detect_diag = "策略二：获取微信窗口坐标失败"
             return "not_found"
-        # 左侧面板宽度约 300px，搜索结果从顶部往下 50-500px
         panel_region = (wx_x, wx_y + 50, 300, 450)
         count = _count_info_buttons(screenshot, panel_region)
+        _detect_diag = (
+            f"策略二(坐标兜底)：两个标签均未匹配，"
+            f"扫描区域 {panel_region}，ⓘ 按钮数={count}；"
+            f"请重新截取 assets/recently_used_label.png"
+        )
 
     if count == 0:
+        _save_debug_screenshot(screenshot, "detect_not_found")
         return "not_found"
     elif count == 1:
+        _detect_diag = ""
         return "ok"
     else:
         return "multiple"
@@ -469,8 +485,9 @@ def send_one(wechat_name: str, name: str, message: str, wx_window: tuple,
 
     result = detect_contact_in_results()
     if result == "not_found":
+        diag = f"（{_detect_diag}）" if _detect_diag else ""
         raise FailError(
-            f"未找到联系人「{wechat_name}」，请检查微信备注名是否与 CSV 一致")
+            f"未找到联系人「{wechat_name}」，请检查微信备注名是否与 CSV 一致{diag}")
     if result == "multiple":
         raise FailError(
             f"「{wechat_name}」搜索结果不唯一，存在发错人风险")
