@@ -164,7 +164,7 @@ function refreshRow(i) {
   const row = state.crew[i];
   const tr = tableBody.querySelector(`tr[data-idx="${i}"]`);
   if (!tr) return;
-  tr.querySelector('.col-status').innerHTML = renderBadge(row.status);
+  tr.querySelector('.col-status').innerHTML = renderBadge(row.status, row.failReason);
   const preview = row.message
     ? row.message.replace(/\n/g, ' ').slice(0, 55) + (row.message.length > 55 ? '…' : '')
     : '— 待生成 —';
@@ -174,7 +174,7 @@ function refreshRow(i) {
   updateStats();
 }
 
-function renderBadge(status) {
+function renderBadge(status, failReason) {
   const map = {
     pending:    ['PENDING',    'badge-pending'],
     ready:      ['READY ✓',   'badge-ready'],
@@ -187,7 +187,11 @@ function renderBadge(status) {
     dry:        ['DRY-RUN',   'badge-dry'],
   };
   const [label, cls] = map[status] || ['—', 'badge-pending'];
-  return `<span class="badge ${cls}">${label}</span>`;
+  const tip = failReason ? ` title="${esc(failReason)}"` : '';
+  const sub = failReason
+    ? `<div class="fail-reason">${esc(failReason)}</div>`
+    : '';
+  return `<span class="badge ${cls}"${tip}>${label}</span>${sub}`;
 }
 
 // ── 生成单条 ──────────────────────────────────────────────────────────────────
@@ -332,7 +336,11 @@ function handleProgressEvent(d) {
       break;
     case 'progress': {
       const idx = findCrewIndex(d.name);
-      if (idx >= 0) { state.crew[idx].status = d.status === 'sending' ? 'sending' : d.status; refreshRow(idx); }
+      if (idx >= 0) {
+        state.crew[idx].status = d.status === 'sending' ? 'sending' : d.status;
+        if (d.status === 'fail') state.crew[idx].failReason = d.reason || '未知原因';
+        refreshRow(idx);
+      }
       const pad = String(d.index).padStart(2, '0') + '/' + String(d.total).padStart(2, '0');
       if (d.status === 'sent')    log(`✅ [${pad}] ${d.name} 已发送`, 'success');
       else if (d.status === 'pasted') log(`📋 [${pad}] ${d.name} 已粘贴`);
