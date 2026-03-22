@@ -38,13 +38,32 @@ metadata: {"openclaw": {"os": ["darwin"], "requires": {"bins": ["python3"], "env
 
 ---
 
+## 可用脚本
+
+Skill 自带两个入口脚本，优先使用这些脚本而不是直接调用 Python：
+
+| 脚本 | 用途 |
+|------|------|
+| `scripts/setup.sh` | 首次安装：检查依赖、创建 .env、提示权限配置 |
+| `scripts/send.sh` | 发送入口：统一封装 Web 控制台和命令行两种模式 |
+
 ## 使用模式
+
+### 首次安装
+
+```bash
+bash skills/wechat-sender/scripts/setup.sh
+```
+
+检查 Python 依赖、.env 文件、辅助功能权限，有问题自动提示修复。
 
 ### 模式一：Web 控制台（推荐新手）
 
 ```bash
-# 启动 Flask Web 服务，浏览器自动打开
-python3 app.py
+# 无参数启动 Web 控制台
+bash skills/wechat-sender/scripts/send.sh
+# 或
+bash skills/wechat-sender/scripts/send.sh --web
 ```
 
 启动后引导用户：
@@ -57,16 +76,16 @@ python3 app.py
 
 ```bash
 # 基本发送
-python3 crew_sender.py <CSV文件路径>
+bash skills/wechat-sender/scripts/send.sh 20260322-大航海船员.csv
 
 # 安全模式（自动粘贴，手动按 Enter 确认）
-python3 crew_sender.py <CSV文件路径> --safe
+bash skills/wechat-sender/scripts/send.sh crew.csv --safe
 
 # 只验证备注名，不发送
-python3 crew_sender.py <CSV文件路径> --dry-run
+bash skills/wechat-sender/scripts/send.sh crew.csv --dry-run
 
 # 跳过某些人
-python3 crew_sender.py <CSV文件路径> --skip 张三,李四
+bash skills/wechat-sender/scripts/send.sh crew.csv --skip 张三,李四
 ```
 
 ---
