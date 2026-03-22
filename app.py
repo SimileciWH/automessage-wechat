@@ -28,6 +28,11 @@ _ai_client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"],
 )
 _ai_model = os.environ.get("OPENAI_MODEL", "deepseek-v3-0324")
+# 每次 AI 调用之间的最小间隔（秒），避免触发 RPM 限速
+_AI_INTERVAL = float(os.environ.get("AI_INTERVAL", "2.0"))
+# 429 限速时的重试等待（秒），最多重试次数
+_RETRY_WAIT = float(os.environ.get("AI_RETRY_WAIT", "30.0"))
+_MAX_RETRIES = int(os.environ.get("AI_MAX_RETRIES", "3"))
 
 SYSTEM_PROMPT = """\
 你是一位高情商的船队打卡激励助手，说话风格像一个真心关心船员的老朋友——活泼、热情、有温度，\
@@ -83,16 +88,25 @@ def _call_ai(name: str, checkins: int, comment: str) -> str:
         f"打卡次数：{checkins}\n"
         f"今日打卡内容评价：{comment}"
     )
-    resp = _ai_client.chat.completions.create(
-        model=_ai_model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.8,
-        max_tokens=300,
-    )
-    return resp.choices[0].message.content.strip()
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = _ai_client.chat.completions.create(
+                model=_ai_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.8,
+                max_tokens=300,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            is_rate_limit = "429" in str(e) or "rate_limit" in str(e).lower()
+            if is_rate_limit and attempt < _MAX_RETRIES:
+                wait = _RETRY_WAIT * (attempt + 1)  # 30s, 60s, 90s
+                time.sleep(wait)
+            else:
+                raise
 
 
 # ── 心跳 Watchdog ──────────────────────────────────────────────────────────────
@@ -191,9 +205,23 @@ def generate_all():
 
     def stream():
         total = len(crew)
+        need_interval = False
         for i, row in enumerate(crew):
             if row.get("skip"):
                 continue
+            # 已有消息直接复用，不调 AI
+            if row.get("message", "").strip():
+                payload = json.dumps(
+                    {"index": i, "total": total, "name": row["name"],
+                     "message": row["message"], "reused": True},
+                    ensure_ascii=False,
+                )
+                yield f"data: {payload}\n\n"
+                continue
+            # 调 AI 前间隔，避免 RPM 超限
+            if need_interval:
+                time.sleep(_AI_INTERVAL)
+            need_interval = True
             try:
                 msg = _call_ai(row["name"], int(row["checkins"]), row["comment"])
             except Exception as e:
