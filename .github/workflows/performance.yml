@@ -1,0 +1,48 @@
+name: Performance – 页面卡顿检测
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  perf-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt pytest
+
+      - name: Install Playwright + Chromium
+        run: |
+          pip install playwright pytest-playwright
+          playwright install chromium --with-deps
+
+      - name: Run performance tests
+        env:
+          OPENAI_BASE_URL: "http://localhost:9999/v1"  # 不需要真实 AI
+          OPENAI_API_KEY: "ci-test-key"
+          OPENAI_MODEL: "test-model"
+        run: |
+          pytest tests/test_performance.py -v \
+            --tb=short \
+            --no-header \
+            -p no:warnings
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-test-screenshots
+          path: tests/screenshots/
+          retention-days: 7

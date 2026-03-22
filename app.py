@@ -257,6 +257,8 @@ def stop_execution():
 
 
 if __name__ == "__main__":
-    import webbrowser
-    webbrowser.open("http://localhost:5001")
-    app.run(host="127.0.0.1", port=5001, debug=False, threaded=True)
+    port = int(os.environ.get("FLASK_PORT", 5001))
+    if os.environ.get("FLASK_PORT") is None:
+        import webbrowser
+        webbrowser.open(f"http://localhost:{port}")
+    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
