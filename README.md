@@ -1,6 +1,6 @@
 # 船员打卡消息自动发送系统
 
-每天只需更新 Excel 并导出 CSV，通过 **Web 控制台** 或 **命令行** 两种方式，自动为所有船员生成个性化鼓励消息并通过微信发送。
+每天只需更新 Excel 并导出 CSV，通过 **Web 控制台**、**命令行** 或 **OpenClaw Skill** 三种方式，自动为所有船员生成个性化鼓励消息并通过微信发送。
 
 ---
 
@@ -186,6 +186,52 @@ hello，张海涛，你已经连续打卡 8 次，还有 4 次就上岸啦...
 ```
 
 遇到 FAIL 立即停止，并保存当前日志。
+
+---
+
+## 使用方式三：OpenClaw Skill
+
+将本项目封装为 [OpenClaw](https://github.com/openclaw/openclaw) Agent 的 skill，直接用自然语言驱动发送流程。
+
+### 本地安装（项目级，推荐）
+
+clone 本仓库后，在项目目录启动 OpenClaw 即自动加载 skill：
+
+```bash
+git clone https://github.com/SimileciWH/automessage-wechat.git
+cd automessage-wechat
+openclaw
+```
+
+> OpenClaw 启动时会自动扫描工作目录下的 `skills/` 文件夹。
+
+### 本地安装（全局级）
+
+安装一次后，所有工作目录都能使用：
+
+```bash
+ln -s /path/to/automessage-wechat/skills/wechat-sender ~/.openclaw/skills/wechat-sender
+# 或直接复制
+cp -r /path/to/automessage-wechat/skills/wechat-sender ~/.openclaw/skills/
+```
+
+### 使用示例
+
+安装后在 OpenClaw 中直接用自然语言触发：
+
+```
+帮我发今天的打卡消息，CSV 文件是 20260322-大航海船员.csv
+```
+
+```
+启动 Web 控制台
+```
+
+```
+用安全模式发送，跳过张三
+```
+
+Skill 会自动选择合适的执行方式，检查前置条件，并引导你完成整个发送流程。
 
 ---
 
