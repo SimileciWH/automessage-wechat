@@ -14,3 +14,11 @@ __pycache__/
 
 # 调试文件（debug_ 前缀）
 debug_*
+
+# 诊断脚本和截图
+diag_detect.py
+logs/*.png
+
+# 临时文件
+=3.0.0
+.playwright-mcp/
