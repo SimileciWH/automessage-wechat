@@ -41,6 +41,17 @@ class FailError(Exception):
     pass
 
 
+# ── JSON 进度输出（供 Web SSE 解析） ──────────────────────────────────────────
+
+_json_progress = False
+
+
+def _emit(obj: dict) -> None:
+    """输出 JSON Lines 进度，仅在 --json-progress 模式下启用。"""
+    if _json_progress:
+        print(json.dumps(obj, ensure_ascii=False), flush=True)
+
+
 # ── AI 初始化（模块级，启动时执行一次） ─────────────────────────────────────────
 
 load_dotenv()
@@ -262,61 +273,88 @@ def search_contact(name: str) -> None:
     time.sleep(SEARCH_WAIT)
 
 
-def _try_locate(asset: str, screenshot) -> object:
+def _try_locate(asset: str, screenshot, confidence: float = LOCATE_CONFIDENCE) -> object:
     """尝试在截图中定位模板，找不到或异常均返回 None。"""
     try:
-        return pyautogui.locate(asset, screenshot, confidence=LOCATE_CONFIDENCE)
+        return pyautogui.locate(asset, screenshot, confidence=confidence)
     except Exception:
         return None
 
 
+def _save_debug_screenshot(screenshot, tag: str) -> None:
+    """保存调试截图到 logs/ 目录，文件名含时间戳和标签。"""
+    from datetime import datetime
+    ts = datetime.now().strftime("%H%M%S")
+    path = Path(f"logs/debug_{ts}_{tag}.png")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    screenshot.save(str(path))
+
+
+def _count_info_buttons(screenshot, region: tuple) -> int:
+    """在指定区域内数 ⓘ 按钮数量，异常视为 0。"""
+    try:
+        buttons = list(pyautogui.locateAll(
+            "assets/info_button.png", screenshot,
+            confidence=INFO_BTN_CONFIDENCE, region=region,
+        ))
+        return len(buttons)
+    except NotImplementedError:
+        # OpenCV 未安装时不支持 confidence，退回无置信度匹配
+        try:
+            buttons = list(pyautogui.locateAll(
+                "assets/info_button.png", screenshot, region=region,
+            ))
+            return len(buttons)
+        except Exception as e2:
+            if type(e2).__name__ != "ImageNotFoundException":
+                raise
+            return 0
+    except Exception as e:
+        if type(e).__name__ != "ImageNotFoundException":
+            raise
+        return 0
+
+
 def detect_contact_in_results() -> Literal["ok", "not_found", "multiple"]:
     """
-    截一次全屏，定位 Contacts 区域，数 ⓘ 按钮数量。
+    截一次全屏，定位联系人区域，数 ⓘ 按钮数量。
     复用同一张截图避免时序差异。
     返回 "ok" / "not_found" / "multiple"。
 
-    Contacts 区域下边界优先级（取 top 最小值，即最近的那个）：
-      1. group_chats_label.png   — 有群聊时出现
-      2. internet_search_label.png — 无群聊时出现（「Internet search results」分区）
-      3. fallback：contacts_label.top + 200px
+    策略一（模板匹配）：用 contacts_label / recently_used_label 定位区域边界。
+    策略二（兜底）：模板匹配失败时，用 get_wechat_window() 坐标直接定位
+      微信左侧面板搜索下拉区域，避免因 DPI 缩放导致模板匹配失败。
     """
     screenshot = pyautogui.screenshot()
 
+    # 策略一：模板匹配定位上边界
     contacts_pos = _try_locate("assets/contacts_label.png", screenshot)
-    if contacts_pos is None:
-        return "not_found"
+    recently_pos = _try_locate("assets/recently_used_label.png", screenshot, confidence=0.55)
+    ref_pos = contacts_pos or recently_pos
 
-    # 查找所有可能的下边界标签，取 top 最小的（离 Contacts 最近）
-    lower_bounds = []
-    for asset in ("assets/group_chats_label.png",
-                  "assets/internet_search_label.png"):
-        pos = _try_locate(asset, screenshot)
-        if pos is not None:
-            lower_bounds.append(pos.top)
+    if ref_pos is not None:
+        # 找下边界
+        lower_bounds = []
+        for asset in ("assets/group_chats_label.png",
+                      "assets/internet_search_label.png"):
+            pos = _try_locate(asset, screenshot)
+            if pos is not None:
+                lower_bounds.append(pos.top)
+        region_bottom = min(lower_bounds) if lower_bounds else ref_pos.top + 200
+        region = (ref_pos.left, ref_pos.top, 500, region_bottom - ref_pos.top)
+        count = _count_info_buttons(screenshot, region)
+    else:
+        # 策略二：模板匹配失败，用微信窗口坐标兜底
+        # ⓘ 按钮只出现在联系人行（群聊无此按钮），全左侧面板扫描安全
+        _save_debug_screenshot(screenshot, "detect_fallback")
+        try:
+            wx_x, wx_y, wx_w, wx_h = get_wechat_window()
+        except Exception:
+            return "not_found"
+        # 左侧面板宽度约 300px，搜索结果从顶部往下 50-500px
+        panel_region = (wx_x, wx_y + 50, 300, 450)
+        count = _count_info_buttons(screenshot, panel_region)
 
-    region_top    = contacts_pos.top
-    region_bottom = min(lower_bounds) if lower_bounds else contacts_pos.top + 200
-    contacts_region = (
-        contacts_pos.left,
-        region_top,
-        500,   # 覆盖完整搜索下拉面板宽度（info_button 可能超出 300px）
-        region_bottom - region_top,
-    )
-
-    try:
-        info_buttons = list(pyautogui.locateAll(
-            "assets/info_button.png", screenshot,
-            confidence=INFO_BTN_CONFIDENCE, region=contacts_region,
-        ))
-    except Exception as e:
-        # pyscreeze.ImageNotFoundException 和 pyautogui.ImageNotFoundException
-        # 在某些安装环境下是不同的类，统一用名字判断
-        if type(e).__name__ != "ImageNotFoundException":
-            raise
-        info_buttons = []
-
-    count = len(info_buttons)
     if count == 0:
         return "not_found"
     elif count == 1:
@@ -411,13 +449,21 @@ def send_one(wechat_name: str, name: str, message: str, wx_window: tuple,
         raise FailError(
             f"「{wechat_name}」搜索结果不唯一，存在发错人风险")
 
-    # 重新截图获取 contacts_pos，用于计算点击坐标
+    # 重新截图获取点击参考位置
     screenshot = pyautogui.screenshot()
-    contacts_pos = pyautogui.locate(
-        "assets/contacts_label.png", screenshot,
-        confidence=LOCATE_CONFIDENCE,
-    )
-    click_contact(contacts_pos)
+    ref_pos = _try_locate("assets/contacts_label.png", screenshot)
+    if ref_pos is None:
+        ref_pos = _try_locate("assets/recently_used_label.png", screenshot, confidence=0.55)
+
+    if ref_pos is not None:
+        click_contact(ref_pos)
+    else:
+        # 兜底：找 ⓘ 按钮，点击其左侧联系人行
+        info_pos = _try_locate("assets/info_button.png", screenshot,
+                               confidence=INFO_BTN_CONFIDENCE)
+        if info_pos is None:
+            raise FailError(f"「{name}」点击前定位失败，找不到联系人行")
+        pyautogui.click(info_pos.left - 80, info_pos.top + info_pos.height // 2)
 
     if not verify_window_title(name):
         raise FailError(f"「{name}」窗口标题验证失败，实际打开了其他对话")
@@ -476,10 +522,15 @@ def _send_loop(
 ) -> None:
     """主发送循环，FAIL 即停，支持 Ctrl+C 中断。"""
     total = len(to_send)
+    _emit({"type": "start", "total": total})
+
     for idx, item in enumerate(to_send, 1):
         name        = item["name"]
         wechat_name = item["wechat_name"]
-        print(f"  [{idx:02d}/{total}]  {name} ...", end=" ", flush=True)
+        if not _json_progress:
+            print(f"  [{idx:02d}/{total}]  {name} ...", end=" ", flush=True)
+        _emit({"type": "progress", "index": idx, "total": total,
+               "name": name, "status": "sending"})
 
         if mode == "dry_run":
             _dry_run_one(wechat_name, item, results)
@@ -490,23 +541,35 @@ def _send_loop(
         try:
             send_one(wechat_name, name, item["message"], wx_window, safe_mode=is_safe)
             if is_safe:
-                print("📋 已粘贴")
+                if not _json_progress:
+                    print("📋 已粘贴")
                 results.append(_make_log_entry(item, "PASTED"))
+                _emit({"type": "progress", "index": idx, "total": total,
+                       "name": name, "status": "pasted"})
             else:
-                print("✅")
+                if not _json_progress:
+                    print("✅")
                 results.append(_make_log_entry(item, "SENT"))
+                _emit({"type": "progress", "index": idx, "total": total,
+                       "name": name, "status": "sent"})
         except FailError as e:
-            print("❌ FAIL")
+            if not _json_progress:
+                print("❌ FAIL")
             results.append(_make_log_entry(item, "FAIL", reason=str(e)))
+            _emit({"type": "progress", "index": idx, "total": total,
+                   "name": name, "status": "fail", "reason": str(e)})
             save_log(log_file, results)
-            print(f"\n❌ FAIL — {e}")
-            print(f"🛑 自动化已停止（已完成 {idx - 1}/{total} 条）")
-            print(f"📄 日志已保存至 {log_file}")
+            if not _json_progress:
+                print(f"\n❌ FAIL — {e}")
+                print(f"🛑 自动化已停止（已完成 {idx - 1}/{total} 条）")
+                print(f"📄 日志已保存至 {log_file}")
             sys.exit(1)
         except KeyboardInterrupt:
-            print("\n\n⚠️  用户中断")
+            if not _json_progress:
+                print("\n\n⚠️  用户中断")
             save_log(log_file, results)
-            print(f"📄 日志已保存至 {log_file}（已完成 {idx - 1}/{total} 条）")
+            if not _json_progress:
+                print(f"📄 日志已保存至 {log_file}（已完成 {idx - 1}/{total} 条）")
             sys.exit(0)
 
         if not is_safe:
@@ -516,8 +579,23 @@ def _send_loop(
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 
 
-def run(csv_path: str, dry_run: bool = False, safe: bool = False) -> None:
-    """主流程：读取 → 生成 → 预览 → 发送 → 记录日志。"""
+def run(
+    csv_path: str,
+    dry_run: bool = False,
+    safe: bool = False,
+    no_confirm: bool = False,
+    extra_skip: set | None = None,
+    json_progress: bool = False,
+) -> None:
+    """主流程：读取 → 生成 → 预览 → 发送 → 记录日志。
+
+    no_confirm：跳过终端预览确认（Web 后端调用时使用）。
+    extra_skip：临时跳过名单（来自 --skip 参数或 Web 后端）。
+    json_progress：以 JSON Lines 输出进度，供 Web SSE 解析。
+    """
+    global _json_progress
+    _json_progress = json_progress
+
     if dry_run:
         mode = "dry_run"
         mode_tag = "  [DRY-RUN 模式]"
@@ -527,21 +605,30 @@ def run(csv_path: str, dry_run: bool = False, safe: bool = False) -> None:
     else:
         mode = "normal"
         mode_tag = ""
-    print(f"\n{'=' * 60}\n  🚢  船员打卡消息自动发送系统{mode_tag}\n{'=' * 60}\n")
 
-    print("📂  读取 CSV ...")
+    if not json_progress:
+        print(f"\n{'=' * 60}\n  🚢  船员打卡消息自动发送系统{mode_tag}\n{'=' * 60}\n")
+        print("📂  读取 CSV ...")
+
     crew_data = load_csv(csv_path)
-    print(f"    共 {len(crew_data)} 位船员\n")
 
-    print("✍️   调用 AI 生成文案 ...")
+    if not json_progress:
+        print(f"    共 {len(crew_data)} 位船员\n")
+        print("✍️   调用 AI 生成文案 ...")
+
     crew_messages = generate_all_messages(crew_data)
 
-    initial_skip = set(SKIP_NAMES)
-    skip = preview_and_confirm(crew_messages, initial_skip)
+    initial_skip = set(SKIP_NAMES) | (extra_skip or set())
+    if no_confirm:
+        skip = initial_skip
+    else:
+        skip = preview_and_confirm(crew_messages, initial_skip)
 
     to_send = [m for m in crew_messages if m["name"] not in skip]
     skipped = [m for m in crew_messages if m["name"] in skip]
-    print(f"\n📤  即将处理 {len(to_send)} 条，跳过 {len(skipped)} 条")
+
+    if not json_progress:
+        print(f"\n📤  即将处理 {len(to_send)} 条，跳过 {len(skipped)} 条")
 
     # dry-run 不需要 wx_window（不点击不发送）
     wx_window = (0, 0, 0, 0)
@@ -558,16 +645,21 @@ def run(csv_path: str, dry_run: bool = False, safe: bool = False) -> None:
     _send_loop(to_send, wx_window, log_file, results, mode)
 
     save_log(log_file, results)
-    sent    = sum(1 for r in results if r["status"] == "SENT")
-    pasted  = sum(1 for r in results if r["status"] == "PASTED")
-    dry_n   = sum(1 for r in results if r["status"] == "DRY_RUN")
-    skip_n  = sum(1 for r in results if r["status"] == "SKIPPED")
+    sent   = sum(1 for r in results if r["status"] == "SENT")
+    pasted = sum(1 for r in results if r["status"] == "PASTED")
+    dry_n  = sum(1 for r in results if r["status"] == "DRY_RUN")
+    skip_n = sum(1 for r in results if r["status"] == "SKIPPED")
+    fail_n = sum(1 for r in results if r["status"] == "FAIL")
 
-    if mode == "safe":
-        print(f"\n📋  已粘贴 {pasted} 条消息到微信聊天框，请逐一检查并手动按 Enter 发送")
-    else:
-        print(f"\n🎉  完成！SENT={sent}  SKIPPED={skip_n}  DRY_RUN={dry_n}")
-    print(f"📄  日志已保存至 {log_file}\n")
+    _emit({"type": "done", "sent": sent, "pasted": pasted,
+           "skipped": skip_n, "failed": fail_n, "dry_run": dry_n})
+
+    if not json_progress:
+        if mode == "safe":
+            print(f"\n📋  已粘贴 {pasted} 条消息到微信聊天框，请逐一检查并手动按 Enter 发送")
+        else:
+            print(f"\n🎉  完成！SENT={sent}  SKIPPED={skip_n}  DRY_RUN={dry_n}")
+        print(f"📄  日志已保存至 {log_file}\n")
 
 
 if __name__ == "__main__":
@@ -575,7 +667,19 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="船员打卡消息自动发送系统")
     parser.add_argument("csv", nargs="?", default=DEFAULT_CSV)
-    parser.add_argument("--dry-run", action="store_true", help="只检测不发送（不进入聊天）")
-    parser.add_argument("--safe", action="store_true", help="安全确认模式：粘贴消息但不按 Enter，由人工逐一发送")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--safe", action="store_true")
+    parser.add_argument("--no-confirm", action="store_true", help="跳过终端预览确认")
+    parser.add_argument("--skip", default="", help="临时跳过名单，逗号分隔")
+    parser.add_argument("--json-progress", action="store_true", help="JSON Lines 进度输出")
     args = parser.parse_args()
-    run(args.csv, dry_run=args.dry_run, safe=args.safe)
+
+    extra = {n.strip() for n in args.skip.split(",") if n.strip()}
+    run(
+        args.csv,
+        dry_run=args.dry_run,
+        safe=args.safe,
+        no_confirm=args.no_confirm,
+        extra_skip=extra,
+        json_progress=args.json_progress,
+    )

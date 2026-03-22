@@ -1,6 +1,6 @@
 # assets 目录说明
 
-这四张图片是 `detect_contact_in_results()` 用于屏幕模板匹配的锚点图。
+这五张图片是 `detect_contact_in_results()` 用于屏幕模板匹配的锚点图。
 从你的 1920×1080 屏幕截图中精确裁取，**不得缩放、不得压缩**。
 
 | 文件名 | 内容 | 用途 |
@@ -9,10 +9,13 @@
 | group_chats_label.png | 搜索下拉中灰色「Group Chats」文字标签 | 定位联系人区域下边界（有群聊时出现） |
 | internet_search_label.png | 搜索下拉中「Internet search results」文字标签 | 定位联系人区域下边界（无群聊时出现） |
 | info_button.png | 联系人行右侧的 ⓘ 圆圈按钮 | 计数联系人数量（必须恰好 1 个） |
+| recently_used_label.png | 搜索下拉中「Recently Used」标签 | 同一联系人搜索多次后出现，用作联系人区域上边界 |
 
-> `group_chats_label.png` 和 `internet_search_label.png` 两张可选其一存在，
-> 代码会自动取最近的那个作为 Contacts 区域下边界。
-> 建议两张都截取放入，适应不同搜索场景。
+> **上边界**：`contacts_label.png` 和 `recently_used_label.png` 任意一个即可，
+> 代码优先使用 `contacts_label`，找不到时自动回退到 `recently_used_label`。
+>
+> **下边界**：`group_chats_label.png` 和 `internet_search_label.png` 两张可选其一存在，
+> 代码会自动取最近的那个作为联系人区域下边界。建议两张都截取放入，适应不同搜索场景。
 
 ## 截取步骤（首次配置）
 
