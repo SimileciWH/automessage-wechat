@@ -361,7 +361,7 @@ def detect_contact_in_results() -> Literal["ok", "not_found", "multiple"]:
 
     # 策略一：模板匹配定位上边界
     contacts_pos = _try_locate("assets/contacts_label.png", screenshot)
-    recently_pos = _try_locate("assets/recently_used_label.png", screenshot, confidence=0.55)
+    recently_pos = _try_locate("assets/recently_used_label.png", screenshot, confidence=0.75)
     ref_pos = contacts_pos or recently_pos
     strategy = "contacts_label" if contacts_pos else ("recently_used_label" if recently_pos else None)
 
@@ -374,7 +374,8 @@ def detect_contact_in_results() -> Literal["ok", "not_found", "multiple"]:
             if pos is not None:
                 lower_bounds.append(pos.top)
         region_bottom = min(lower_bounds) if lower_bounds else ref_pos.top + 200
-        region = (ref_pos.left, ref_pos.top, 500, region_bottom - ref_pos.top)
+        # 宽度用 800px 覆盖 Retina 2x 下微信搜索面板全宽（ⓘ 按钮在右侧约 600px 处）
+        region = (ref_pos.left, ref_pos.top, 800, region_bottom - ref_pos.top)
         count = _count_info_buttons(screenshot, region)
         _detect_diag = (
             f"策略一({strategy})：区域 {region}，ⓘ 按钮数={count}"
