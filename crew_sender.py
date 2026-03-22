@@ -31,7 +31,7 @@ SEND_INTERVAL           = 4.0       # 每条发完后冷却秒数
 SEARCH_WAIT             = 1.5       # 粘贴姓名后等待搜索结果秒数
 OPEN_WAIT               = 1.2       # 点击联系人后等待对话窗口打开秒数
 LOCATE_CONFIDENCE       = 0.85      # locateOnScreen 置信度阈值（通用）
-INFO_BTN_CONFIDENCE     = 0.60      # ⓘ 按钮专用阈值（图标小，匹配较宽松）
+INFO_BTN_CONFIDENCE     = 0.75      # ⓘ 按钮专用阈值（深色模式模板匹配 0.9+，0.60 会产生像素级重复误报）
 SENT_VARIANCE_THRESHOLD = 12.0      # verify_sent 方差阈值（首次实测后调整）
 
 # ── 自定义异常 ─────────────────────────────────────────────────────────────────
@@ -320,20 +320,30 @@ def _save_debug_screenshot(screenshot, tag: str) -> None:
     screenshot.save(str(path))
 
 
+def _dedup_boxes(boxes, min_dist: int = 30) -> list:
+    """去除像素级重复匹配（同一按钮在相邻坐标多次命中）。"""
+    unique = []
+    for b in boxes:
+        if not any(abs(b.left - u.left) < min_dist and abs(b.top - u.top) < min_dist
+                   for u in unique):
+            unique.append(b)
+    return unique
+
+
 def _count_info_buttons(screenshot, region: tuple) -> int:
-    """在指定区域内数 ⓘ 按钮数量，异常视为 0。"""
+    """在指定区域内数 ⓘ 按钮数量，去重后返回，异常视为 0。"""
     try:
-        buttons = list(pyautogui.locateAll(
+        buttons = _dedup_boxes(list(pyautogui.locateAll(
             "assets/info_button.png", screenshot,
             confidence=INFO_BTN_CONFIDENCE, region=region,
-        ))
+        )))
         return len(buttons)
     except NotImplementedError:
         # OpenCV 未安装时不支持 confidence，退回无置信度匹配
         try:
-            buttons = list(pyautogui.locateAll(
+            buttons = _dedup_boxes(list(pyautogui.locateAll(
                 "assets/info_button.png", screenshot, region=region,
-            ))
+            )))
             return len(buttons)
         except Exception as e2:
             if type(e2).__name__ != "ImageNotFoundException":
