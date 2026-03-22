@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CREW SENDER — 船员激励系统</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- 雷达装饰 -->
+  <div class="radar-wrap" aria-hidden="true">
+    <div class="radar-ring r1"></div>
+    <div class="radar-ring r2"></div>
+    <div class="radar-ring r3"></div>
+    <div class="radar-sweep"></div>
+  </div>
+
+  <!-- 顶部导航 -->
+  <header class="app-header">
+    <div class="header-brand">
+      <span class="brand-icon">⚓</span>
+      <span class="brand-title">CREW SENDER</span>
+      <span class="brand-sub">船员激励系统</span>
+    </div>
+    <div class="header-meta">
+      <span class="csv-name" id="csvName">未加载文件</span>
+      <span class="status-dot" id="statusDot" title="服务运行中"></span>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <!-- 左侧控制面板 -->
+    <aside class="control-panel">
+
+      <div class="panel-section">
+        <div class="section-label">导入数据</div>
+        <label class="file-drop" id="fileDrop">
+          <input type="file" id="fileInput" accept=".csv" hidden>
+          <span class="drop-icon">📂</span>
+          <span class="drop-text">点击或拖拽 CSV 文件</span>
+        </label>
+      </div>
+
+      <div class="panel-section">
+        <div class="section-label">发送模式</div>
+        <div class="mode-cards">
+          <label class="mode-card" data-mode="normal">
+            <input type="radio" name="mode" value="normal" checked hidden>
+            <span class="mode-icon">🚀</span>
+            <span class="mode-name">正式发送</span>
+            <span class="mode-desc">自动粘贴并按 Enter</span>
+          </label>
+          <label class="mode-card" data-mode="safe">
+            <input type="radio" name="mode" value="safe" hidden>
+            <span class="mode-icon">🔍</span>
+            <span class="mode-name">安全模式</span>
+            <span class="mode-desc">粘贴后人工确认发送</span>
+          </label>
+          <label class="mode-card" data-mode="dry-run">
+            <input type="radio" name="mode" value="dry-run" hidden>
+            <span class="mode-icon">🧪</span>
+            <span class="mode-name">Dry-Run</span>
+            <span class="mode-desc">仅搜索检测，不发送</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="panel-section actions">
+        <button class="btn btn-secondary" id="btnGenAll" disabled>
+          ✨ 全部生成
+        </button>
+        <button class="btn btn-secondary" id="btnSave" disabled>
+          💾 保存 CSV
+        </button>
+        <button class="btn btn-primary" id="btnExecute" disabled>
+          ▶ 执行
+        </button>
+        <button class="btn btn-danger" id="btnStop" disabled>
+          ■ 停止
+        </button>
+      </div>
+
+      <div class="panel-section">
+        <div class="stats-row">
+          <div class="stat-item">
+            <span class="stat-val" id="statTotal">—</span>
+            <span class="stat-lbl">总计</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-val teal" id="statReady">—</span>
+            <span class="stat-lbl">已就绪</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-val amber" id="statSkip">—</span>
+            <span class="stat-lbl">跳过</span>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- 主任务区 -->
+    <section class="mission-area">
+      <div class="table-wrap" id="tableWrap">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">🌊</div>
+          <div class="empty-text">请从左侧导入 CSV 文件</div>
+        </div>
+        <table class="mission-table" id="missionTable" hidden>
+          <thead>
+            <tr>
+              <th class="col-skip">跳过</th>
+              <th class="col-idx">#</th>
+              <th class="col-status">状态</th>
+              <th class="col-name">姓名</th>
+              <th class="col-checkins">打卡</th>
+              <th class="col-preview">消息预览</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- 底部控制台 -->
+  <footer class="console-footer">
+    <div class="console-header">
+      <span class="console-title">▌ COMM LOG</span>
+      <button class="console-clear" id="consoleClear">清空</button>
+    </div>
+    <div class="console-body" id="consoleBody">
+      <div class="console-line muted">— 系统就绪，等待操作 —</div>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
