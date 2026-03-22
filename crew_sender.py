@@ -307,6 +307,17 @@ def _try_locate(asset: str, screenshot, confidence: float = LOCATE_CONFIDENCE) -
         return None
 
 
+def _get_scale() -> float:
+    """返回 Retina 缩放因子（物理像素 / 逻辑像素）。"""
+    ss_w = pyautogui.screenshot().size[0]
+    return ss_w / pyautogui.size().width
+
+
+def _to_logical(x: int, y: int, scale: float) -> tuple[int, int]:
+    """将 locate() 返回的物理像素坐标转换为 pyautogui.click() 所需的逻辑坐标。"""
+    return int(x / scale), int(y / scale)
+
+
 # 记录上一次 detect_contact_in_results 的诊断信息，供错误消息使用
 _detect_diag: str = ""
 
@@ -417,10 +428,12 @@ def detect_contact_in_results() -> Literal["ok", "not_found", "multiple"]:
 
 
 def click_contact(contacts_label_pos) -> None:
-    """点击 Contacts 标签下方约 38px 处的联系人行。"""
-    click_x = contacts_label_pos.left + contacts_label_pos.width // 2
-    click_y = contacts_label_pos.top + contacts_label_pos.height + 38
-    pyautogui.click(click_x, click_y)
+    """点击 Contacts/Recently Used 标签下方联系人行（自动转换 Retina 物理→逻辑坐标）。"""
+    scale = _get_scale()
+    phys_x = contacts_label_pos.left + contacts_label_pos.width // 2
+    phys_y = contacts_label_pos.top + contacts_label_pos.height + 38
+    lx, ly = _to_logical(phys_x, phys_y, scale)
+    pyautogui.click(lx, ly)
     time.sleep(OPEN_WAIT)
 
 
@@ -505,19 +518,24 @@ def send_one(wechat_name: str, name: str, message: str, wx_window: tuple,
 
     # 重新截图获取点击参考位置
     screenshot = pyautogui.screenshot()
+    scale = _get_scale()
     ref_pos = _try_locate("assets/contacts_label.png", screenshot)
     if ref_pos is None:
-        ref_pos = _try_locate("assets/recently_used_label.png", screenshot, confidence=0.55)
+        ref_pos = _try_locate("assets/recently_used_label.png", screenshot,
+                              confidence=0.75)
 
     if ref_pos is not None:
         click_contact(ref_pos)
     else:
-        # 兜底：找 ⓘ 按钮，点击其左侧联系人行
+        # 兜底：找 ⓘ 按钮，点击其左侧联系人行（同样需要转逻辑坐标）
         info_pos = _try_locate("assets/info_button.png", screenshot,
                                confidence=INFO_BTN_CONFIDENCE)
         if info_pos is None:
             raise FailError(f"「{name}」点击前定位失败，找不到联系人行")
-        pyautogui.click(info_pos.left - 80, info_pos.top + info_pos.height // 2)
+        phys_x = info_pos.left - 80
+        phys_y = info_pos.top + info_pos.height // 2
+        lx, ly = _to_logical(phys_x, phys_y, scale)
+        pyautogui.click(lx, ly)
 
     if not verify_window_title(name):
         raise FailError(f"「{name}」窗口标题验证失败，实际打开了其他对话")
