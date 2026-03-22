@@ -30,7 +30,8 @@ DEFAULT_CSV             = "crew_today.csv"
 SEND_INTERVAL           = 4.0       # 每条发完后冷却秒数
 SEARCH_WAIT             = 1.5       # 粘贴姓名后等待搜索结果秒数
 OPEN_WAIT               = 1.2       # 点击联系人后等待对话窗口打开秒数
-LOCATE_CONFIDENCE       = 0.85      # locateOnScreen 置信度阈值
+LOCATE_CONFIDENCE       = 0.85      # locateOnScreen 置信度阈值（通用）
+INFO_BTN_CONFIDENCE     = 0.60      # ⓘ 按钮专用阈值（图标小，匹配较宽松）
 SENT_VARIANCE_THRESHOLD = 12.0      # verify_sent 方差阈值（首次实测后调整）
 
 # ── 自定义异常 ─────────────────────────────────────────────────────────────────
@@ -76,8 +77,13 @@ hello，{name}，你已经连续打卡 {checkins} 次，{shore_hint}。\
 
 
 def load_csv(path: str) -> list[dict]:
-    """读取 CSV，校验必要列，返回 list[dict]。格式错误立即退出。"""
-    required = {"姓名", "打卡次数", "评价"}
+    """读取 CSV，校验必要列，返回 list[dict]。格式错误立即退出。
+
+    CSV 必须包含四列：微信名称（搜索用）、姓名（消息称谓）、打卡次数、评价。
+    Excel 导出时末尾可能有多余空列（,,,,,）自动忽略。
+    可选第五列 message：已有内容则直接使用，不再调用 AI。
+    """
+    required = {"微信名称", "姓名", "打卡次数", "评价"}
     try:
         with open(path, encoding="utf-8-sig", newline="") as f:
             rows = list(csv.DictReader(f))
@@ -88,6 +94,9 @@ def load_csv(path: str) -> list[dict]:
 
     if not rows:
         sys.exit(f"❌ CSV 文件为空：{path}")
+
+    # 过滤 Excel 导出时产生的空列名（如 ",,,,,,,,,," 对应的空字符串 key）
+    rows = [{k: v for k, v in row.items() if k.strip()} for row in rows]
 
     missing = required - set(rows[0].keys())
     if missing:
@@ -125,21 +134,37 @@ def generate_message(name: str, checkins: int, comment: str) -> str:
 
 
 def generate_all_messages(crew_data: list[dict]) -> list[dict]:
-    """批量生成文案，返回附带 message 字段的 list[dict]。"""
+    """批量生成文案，返回附带 message 字段的 list[dict]。
+
+    若 CSV 已有 message 列且非空，则直接复用，不调用 AI。
+    """
     results = []
     total = len(crew_data)
     for i, row in enumerate(crew_data, 1):
-        name = row["姓名"].strip()
-        checkins = int(row["打卡次数"])
-        comment = row["评价"].strip()
-        print(f"  生成文案 [{i:02d}/{total}]  {name} ...", end=" ", flush=True)
-        try:
-            message = generate_message(name, checkins, comment)
-        except Exception as e:
-            sys.exit(f"\n❌ AI 生成失败（{name}）：{e}")
-        print("完成")
-        results.append({"name": name, "checkins": checkins,
-                        "comment": comment, "message": message})
+        wechat_name = row["微信名称"].strip()
+        name        = row["姓名"].strip()
+        checkins    = int(row["打卡次数"])
+        comment     = row["评价"].strip()
+        existing_msg = row.get("message", "").strip()
+
+        if existing_msg:
+            print(f"  复用消息 [{i:02d}/{total}]  {name}")
+            message = existing_msg
+        else:
+            print(f"  生成文案 [{i:02d}/{total}]  {name} ...", end=" ", flush=True)
+            try:
+                message = generate_message(name, checkins, comment)
+            except Exception as e:
+                sys.exit(f"\n❌ AI 生成失败（{name}）：{e}")
+            print("完成")
+
+        results.append({
+            "wechat_name": wechat_name,
+            "name":        name,
+            "checkins":    checkins,
+            "comment":     comment,
+            "message":     message,
+        })
     return results
 
 
@@ -237,41 +262,52 @@ def search_contact(name: str) -> None:
     time.sleep(SEARCH_WAIT)
 
 
+def _try_locate(asset: str, screenshot) -> object:
+    """尝试在截图中定位模板，找不到或异常均返回 None。"""
+    try:
+        return pyautogui.locate(asset, screenshot, confidence=LOCATE_CONFIDENCE)
+    except Exception:
+        return None
+
+
 def detect_contact_in_results() -> Literal["ok", "not_found", "multiple"]:
     """
     截一次全屏，定位 Contacts 区域，数 ⓘ 按钮数量。
     复用同一张截图避免时序差异。
     返回 "ok" / "not_found" / "multiple"。
+
+    Contacts 区域下边界优先级（取 top 最小值，即最近的那个）：
+      1. group_chats_label.png   — 有群聊时出现
+      2. internet_search_label.png — 无群聊时出现（「Internet search results」分区）
+      3. fallback：contacts_label.top + 200px
     """
     screenshot = pyautogui.screenshot()
 
-    contacts_pos = pyautogui.locate(
-        "assets/contacts_label.png", screenshot,
-        confidence=LOCATE_CONFIDENCE,
-    )
+    contacts_pos = _try_locate("assets/contacts_label.png", screenshot)
     if contacts_pos is None:
         return "not_found"
 
-    group_chats_pos = pyautogui.locate(
-        "assets/group_chats_label.png", screenshot,
-        confidence=LOCATE_CONFIDENCE,
-    )
+    # 查找所有可能的下边界标签，取 top 最小的（离 Contacts 最近）
+    lower_bounds = []
+    for asset in ("assets/group_chats_label.png",
+                  "assets/internet_search_label.png"):
+        pos = _try_locate(asset, screenshot)
+        if pos is not None:
+            lower_bounds.append(pos.top)
 
     region_top    = contacts_pos.top
-    region_bottom = (
-        group_chats_pos.top if group_chats_pos else contacts_pos.top + 200
-    )
+    region_bottom = min(lower_bounds) if lower_bounds else contacts_pos.top + 200
     contacts_region = (
         contacts_pos.left,
         region_top,
-        500,   # 覆盖完整搜索下拉面板宽度（info_button 可能超出原来的 300px）
+        500,   # 覆盖完整搜索下拉面板宽度（info_button 可能超出 300px）
         region_bottom - region_top,
     )
 
     try:
         info_buttons = list(pyautogui.locateAll(
             "assets/info_button.png", screenshot,
-            confidence=LOCATE_CONFIDENCE, region=contacts_region,
+            confidence=INFO_BTN_CONFIDENCE, region=contacts_region,
         ))
     except Exception as e:
         # pyscreeze.ImageNotFoundException 和 pyautogui.ImageNotFoundException
@@ -355,21 +391,25 @@ def verify_sent(wx_window: tuple) -> bool:
 # ── 单人完整流程 ───────────────────────────────────────────────────────────────
 
 
-def send_one(name: str, message: str, wx_window: tuple,
+def send_one(wechat_name: str, name: str, message: str, wx_window: tuple,
              safe_mode: bool = False) -> None:
     """
     执行单人完整微信发送流程。任何环节异常均抛出 FailError。
+    wechat_name：用于微信搜索（CSV 的「微信名称」列）。
+    name：用于错误信息和日志（CSV 的「姓名」列）。
     safe_mode=True：只粘贴不发送，跳过 verify_sent（由人工手动按 Enter）。
     """
     activate_wechat()
     open_search()
-    search_contact(name)
+    search_contact(wechat_name)     # 用微信名称搜索
 
     result = detect_contact_in_results()
     if result == "not_found":
-        raise FailError(f"未找到联系人「{name}」，请检查备注名是否与 CSV 一致")
+        raise FailError(
+            f"未找到联系人「{wechat_name}」，请检查微信备注名是否与 CSV 一致")
     if result == "multiple":
-        raise FailError(f"「{name}」搜索结果不唯一，存在发错人风险")
+        raise FailError(
+            f"「{wechat_name}」搜索结果不唯一，存在发错人风险")
 
     # 重新截图获取 contacts_pos，用于计算点击坐标
     screenshot = pyautogui.screenshot()
@@ -404,20 +444,21 @@ def save_log(path: Path, results: list[dict]) -> None:
 def _make_log_entry(item: dict, status: str, **extra) -> dict:
     """构造单条日志记录。"""
     return {
-        "name": item["name"],
-        "status": status,
-        "checkins": item["checkins"],
-        "message": item["message"],
-        "time": datetime.now().isoformat(timespec="seconds"),
+        "wechat_name": item.get("wechat_name", ""),
+        "name":        item["name"],
+        "status":      status,
+        "checkins":    item["checkins"],
+        "message":     item["message"],
+        "time":        datetime.now().isoformat(timespec="seconds"),
         **extra,
     }
 
 
-def _dry_run_one(name: str, item: dict, results: list) -> None:
+def _dry_run_one(wechat_name: str, item: dict, results: list) -> None:
     """dry-run 模式：搜索+检测，不点击不发送。"""
     activate_wechat()
     open_search()
-    search_contact(name)
+    search_contact(wechat_name)
     detect_result = detect_contact_in_results()
     print(f"检测={detect_result}  [DRY_RUN]")
     # 关闭搜索框，避免干扰下次（key code 53 = Escape）
@@ -436,17 +477,18 @@ def _send_loop(
     """主发送循环，FAIL 即停，支持 Ctrl+C 中断。"""
     total = len(to_send)
     for idx, item in enumerate(to_send, 1):
-        name = item["name"]
+        name        = item["name"]
+        wechat_name = item["wechat_name"]
         print(f"  [{idx:02d}/{total}]  {name} ...", end=" ", flush=True)
 
         if mode == "dry_run":
-            _dry_run_one(name, item, results)
+            _dry_run_one(wechat_name, item, results)
             time.sleep(1.0)
             continue
 
         is_safe = (mode == "safe")
         try:
-            send_one(name, item["message"], wx_window, safe_mode=is_safe)
+            send_one(wechat_name, name, item["message"], wx_window, safe_mode=is_safe)
             if is_safe:
                 print("📋 已粘贴")
                 results.append(_make_log_entry(item, "PASTED"))
