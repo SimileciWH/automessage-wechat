@@ -51,9 +51,22 @@ fi
 ok "pip $(python3 -m pip --version | awk '{print $2}')"
 
 # ── 4. 安装 Python 依赖 ───────────────────────────────────────────────────────
-info "安装 Python 依赖..."
-python3 -m pip install -r requirements.txt --quiet
-ok "依赖安装完成"
+info "检查 Python 依赖..."
+ALL_INSTALLED=true
+for pkg in flask openai pyautogui pyperclip PIL numpy cv2 dotenv; do
+  if ! python3 -c "import $pkg" 2>/dev/null; then
+    ALL_INSTALLED=false
+    break
+  fi
+done
+
+if $ALL_INSTALLED; then
+  ok "依赖已全部安装，跳过"
+else
+  info "安装缺失依赖..."
+  python3 -m pip install -r requirements.txt --quiet
+  ok "依赖安装完成"
+fi
 
 # ── 5. 验证关键依赖可导入 ─────────────────────────────────────────────────────
 info "验证关键依赖..."
